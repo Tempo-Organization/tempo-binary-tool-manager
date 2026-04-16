@@ -6,7 +6,6 @@ import zipfile
 import tarfile
 import platform
 from pathlib import Path
-from typing import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -27,8 +26,8 @@ SCRIPT_DIR = (
 _cache_dir: str | None = None
 # override this with a function that takes in a string to replace the print out messages
 logging_function: Callable = print
-is_online = False
-has_inited = False
+has_inited: bool = False
+is_online: bool = False
 
 
 def set_cache_dir_from_tempo_config_file(path: str | None) -> None:
