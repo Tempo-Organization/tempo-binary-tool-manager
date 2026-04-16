@@ -6,6 +6,7 @@ import zipfile
 import tarfile
 import platform
 from pathlib import Path
+from typing import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
