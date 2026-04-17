@@ -104,8 +104,6 @@ def init_is_online(timeout: float = 1):
 
 
 def is_current_preferred_tool_version_installed(tool_name: str) -> bool:
-    # this doesn't check the tag like it should
-    # Check if the jmap tool is present in the cache and has a valid version
     for tool in TempoCache.tool_entries:
         if tool.get_repo_name().lower() == tool_name:
             for entry in tool.cache_entries:
@@ -121,6 +119,15 @@ class ToolInfo:
     repo_owner: str
     file_paths: list[str] = field(default_factory=list)
     is_online: bool = field(default_factory=lambda: init_is_online())
+
+    def __post_init__(self):
+        global TempoCache
+
+        if not isinstance(TempoCache, Tools):
+            raise RuntimeError('Tempo cache seems to not have been inited, is not an instance of Tools')
+
+        if not is_current_preferred_tool_version_installed(self.tool_name):
+            install_tool_to_cache(TempoCache, self)
 
 
     def get_file_to_download(self) -> str:
@@ -145,39 +152,41 @@ class ToolInfo:
             raise ValueError('Unsupported OS')
 
 
+    # maybe when this is called the installation/check for valid wanted version in cache should occur?
     def get_executable_path(self) -> str:
         return os.path.normpath(f'{str(self.get_tool_directory())}/{self.get_executable_name()}')
 
 
     def get_current_preferred_release_tag(self) -> str:
-            default_value = "latest"
-            config_value = None
+        global settings_information
+        default_value = "latest"
+        config_value = None
 
-            if settings_information.settings:
-                config_value = settings_information.settings.get(f'{self.tool_name.lower()}_info', {}).get(f'{self.tool_name.lower()}_release_tag')
+        if settings_information.settings:
+            config_value = settings_information.settings.get(f'{self.tool_name.lower()}_info', {}).get(f'{self.tool_name.lower()}_release_tag')
 
-            env_value = os.environ.get(f'TEMPO_{self.tool_name.upper()}_RELEASE_TAG')
+        env_value = os.environ.get(f'TEMPO_{self.tool_name.upper()}_RELEASE_TAG')
 
-            cli_value = None
-            if f'--{self.tool_name.lower()}-release-tag' in sys.argv:
-                idx = sys.argv.index(f'--{self.tool_name.lower()}-release-tag')
-                if idx + 1 < len(sys.argv):
-                    cli_value = sys.argv[idx + 1]
-                else:
-                    raise RuntimeError(f'You passed --{self.tool_name.lower()}-release-tag without a tag after it.')
+        cli_value = None
+        if f'--{self.tool_name.lower()}-release-tag' in sys.argv:
+            idx = sys.argv.index(f'--{self.tool_name.lower()}-release-tag')
+            if idx + 1 < len(sys.argv):
+                cli_value = sys.argv[idx + 1]
+            else:
+                raise RuntimeError(f'You passed --{self.tool_name.lower()}-release-tag without a tag after it.')
 
-            prioritized_value = cli_value or env_value or config_value or default_value
+        prioritized_value = cli_value or env_value or config_value or default_value
 
-            if prioritized_value == "latest":
-                try:
-                    response = requests.get(f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases/latest", timeout=5)
-                    response.raise_for_status()
-                    return response.json().get("tag_name", "latest")
-                except Exception as e:
-                    logging_function(f"[Warning] Failed to fetch latest {self.tool_name.lower()} release tag from GitHub: {e}")
-                    return "latest"
+        if prioritized_value == "latest":
+            try:
+                response = requests.get(f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases/latest", timeout=5)
+                response.raise_for_status()
+                return response.json().get("tag_name", "latest")
+            except Exception as e:
+                logging_function(f"[Warning] Failed to fetch latest {self.tool_name.lower()} release tag from GitHub: {e}")
+                return "latest"
 
-            return prioritized_value
+        return prioritized_value
 
 
     def get_tool_directory(self) -> pathlib.Path:
@@ -273,6 +282,7 @@ class Tools:
     def prune_multiple_tools(self, tool_names: list[str], cache_root: str):
         for name in tool_names:
             self.prune_single_tool(name, cache_root)
+
 
     def to_toml_dict(self) -> dict:
             return {
