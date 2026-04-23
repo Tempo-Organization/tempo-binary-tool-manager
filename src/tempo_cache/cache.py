@@ -506,6 +506,7 @@ def save_tools_to_toml_file(tools: Tools, filepath: Path) -> None:
     with Path.open(filepath, "w", encoding="utf-8") as f:
         f.write(dumps(doc))
 
+
 def load_tools_from_toml_file(filepath: Path) -> Tools:
     with Path.open(filepath, "r", encoding="utf-8") as f:
         data: TOMLDocument = loads(f.read())
@@ -514,16 +515,16 @@ def load_tools_from_toml_file(filepath: Path) -> Tools:
     for tool_data in data.get("tool_entries", []):
         cache_entries = [
             CacheEntry(
-                release_tag=entry["release_tag"],
-                installed_files=entry["installed_files"],
-                executable_path=entry["executable_path"],
-                download_url=entry["download_url"],
-                file_to_download=entry["file_to_download"],
+                release_tag=str(entry["release_tag"]),
+                installed_files=[Path(str(p)) for p in entry["installed_files"]],
+                executable_path=Path(str(entry["executable_path"])),
+                download_url=str(entry["download_url"]),
+                file_to_download=str(entry["file_to_download"]),
             )
             for entry in tool_data.get("cache_entries", [])
         ]
         tool = Tool(
-            tool_repo_url=tool_data["tool_repo_url"],
+            tool_repo_url=str(tool_data["tool_repo_url"]),
             cache_entries=cache_entries,
         )
         tool_entries.append(tool)
