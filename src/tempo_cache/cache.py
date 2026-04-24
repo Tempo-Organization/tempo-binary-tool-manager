@@ -492,9 +492,9 @@ def save_tools_to_toml_file(tools: Tools, filepath: Path) -> None:
         for entry in tool.cache_entries:
             entry_table = table()
             entry_table["release_tag"] = entry.release_tag
-            entry_table["installed_files"] = entry.installed_files
+            entry_table["installed_files"] = [str(p) for p in entry.installed_files]
             entry_table["download_url"] = entry.download_url
-            entry_table["executable_path"] = entry.executable_path
+            entry_table["executable_path"] = str(entry.executable_path)
             entry_table["file_to_download"] = entry.file_to_download
             cache_entries.append(entry_table)
 
