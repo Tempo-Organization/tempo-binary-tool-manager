@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 import sys
 import stat
@@ -17,8 +18,6 @@ import requests
 import platformdirs
 from tomlkit.toml_document import TOMLDocument
 from tomlkit import table, document, dumps, loads
-
-from tempo_settings.tempo_settings import SettingsInformation
 
 
 SCRIPT_DIR = (
@@ -138,155 +137,6 @@ def get_cache_dir_param_in_args() -> Path | None:
         if idx + 1 < len(sys.argv):
             return Path(sys.argv[idx + 1])
     return None
-
-
-@dataclass
-class ToolInfo:
-    tool_name: str
-    repo_name: str
-    repo_owner: str
-    cache: ToolsCache
-    file_paths: list[Path] = field(default_factory=list)
-    settings: dict | None = None
-
-
-    def resolve_release_tag(self) -> str:
-        raw = self.get_current_preferred_release_tag()
-
-        if raw != "latest":
-            return raw
-
-        url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases"
-        response = github_get(url)
-        response.raise_for_status()
-
-        releases = response.json()
-
-        if not releases:
-            raise RuntimeError("No releases found for repository")
-
-        # stable first
-        for r in releases:
-            if not r.get("draft") and not r.get("prerelease"):
-                return r["tag_name"]
-
-        # prerelease fallback
-        for r in releases:
-            if not r.get("draft"):
-                return r["tag_name"]
-
-        raise RuntimeError("No valid release found")
-
-
-    def ensure_tool_installed(self) -> None:
-        if not self.is_current_preferred_tool_version_installed():
-            self.cache.install_tool_to_cache(self)
-
-
-    def get_file_to_download(self) -> str:
-        if is_windows():
-            return f'{self.tool_name}-x86_64-pc-windows-msvc.zip'
-        elif is_linux():
-            return f'{self.tool_name}-x86_64-unknown-linux-gnu.tar.xz'
-        else:
-            raise ValueError('Unsupported OS')
-
-
-    def get_download_url(self) -> str:
-        return f'https://github.com/{self.repo_owner}/{self.repo_name}/releases/download/{self.resolve_release_tag()}/{self.get_file_to_download()}'
-
-
-    def get_executable_name(self) -> str:
-        if is_windows():
-            return f'{self.tool_name}.exe'
-        elif is_linux():
-            return f'{self.tool_name}'
-        else:
-            raise ValueError('Unsupported OS')
-
-
-    def get_executable_path(self) -> Path:
-        return Path(self.get_tool_directory() / self.get_executable_name())
-
-
-    def get_current_preferred_release_tag(self) -> str:
-        default_value = "latest"
-
-        config_value = None
-        if self.settings:
-            config_value = self.settings.get(
-                f'{self.tool_name.lower()}_info',
-                {}
-            ).get(f'{self.tool_name.lower()}_release_tag')
-
-        env_value = os.environ.get(
-            f'{self.cache.main_tool_name.upper()}_{self.tool_name.upper()}_RELEASE_TAG'
-        )
-
-        cli_value = None
-        flag = f'--{self.tool_name.lower()}-release-tag'
-
-        if flag in sys.argv:
-            idx = sys.argv.index(flag)
-            if idx + 1 < len(sys.argv):
-                cli_value = sys.argv[idx + 1]
-            else:
-                raise RuntimeError(f"{flag} passed without value")
-
-        return next(
-            v for v in [cli_value, env_value, config_value, default_value]
-            if v not in (None, "")
-        )
-
-
-    def get_tool_directory(self) -> Path:
-        default_value = self.cache.get_tool_install_dir(
-            self.repo_name.lower(),
-            self.tool_name.lower(),
-            self.resolve_release_tag(),
-        )
-
-        config_value = None
-        if self.settings:
-            config_value = settings_information.settings.get(f"{self.tool_name.lower()}_info", {}).get(
-                f"{self.tool_name.lower()}_dir", None,
-            )
-
-        env_value = os.environ.get(f"{self.cache.main_tool_name.upper()}_{self.tool_name.upper()}_DIR")
-
-        cli_value = None
-        if f"--{self.tool_name.lower()}-dir" in sys.argv:
-            idx = sys.argv.index(f"--{self.tool_name.lower()}-dir")
-            if idx + 1 < len(sys.argv):
-                cli_value = sys.argv[idx + 1]
-            else:
-                raise RuntimeError(f"you passed --{self.tool_name.lower()}-dir without a tag after")
-
-        prioritized_value = next(
-            v for v in [cli_value, env_value, config_value, default_value]
-            if v not in (None, "")
-        )
-
-        if not prioritized_value:
-            raise RuntimeError('get tool directory could not find a prioritized value')
-
-        if isinstance(prioritized_value, str):
-            prioritized_value = Path(prioritized_value)
-
-        if not prioritized_value.is_absolute():
-            return Path(self.settings['settings_json_dir'] / prioritized_value).resolve()
-        else:
-            return Path(prioritized_value).resolve()
-
-
-    def is_current_preferred_tool_version_installed(self) -> bool:
-        for tool in self.cache.tools.tool_entries:
-            if tool.get_repo_name().lower() == self.repo_name.lower():
-                for entry in tool.cache_entries:
-                    if entry.release_tag == self.resolve_release_tag():
-                        if entry.is_cache_valid():
-                            return True
-        return False
 
 
 @dataclass
@@ -768,3 +618,166 @@ class ToolsCache:
             tool_entries.append(tool)
 
         return Tools(tool_entries=tool_entries)
+
+
+class ToolInfo:
+    registry = []
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        ToolInfo.registry.append(cls)
+
+    def __init__(
+        self,
+        tool_name: str | None = None,
+        repo_name: str | None = None,
+        repo_owner: str | None = None,
+        cache: ToolsCache | None = None,
+        file_paths: list[Path] | None = None,
+        settings: dict | None = None,
+    ) -> None:
+        self.tool_name = tool_name
+        self.repo_name = repo_name
+        self.repo_owner = repo_owner
+        self.cache = cache
+        self.file_paths = file_paths or []
+        self.settings = settings
+
+
+    def resolve_release_tag(self) -> str:
+        raw = self.get_current_preferred_release_tag()
+
+        if raw != "latest":
+            return raw
+
+        url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases"
+        response = github_get(url)
+        response.raise_for_status()
+
+        releases = response.json()
+
+        if not releases:
+            raise RuntimeError("No releases found for repository")
+
+        # stable first
+        for r in releases:
+            if not r.get("draft") and not r.get("prerelease"):
+                return r["tag_name"]
+
+        # prerelease fallback
+        for r in releases:
+            if not r.get("draft"):
+                return r["tag_name"]
+
+        raise RuntimeError("No valid release found")
+
+
+    def ensure_tool_installed(self) -> None:
+        if not self.is_current_preferred_tool_version_installed():
+            self.cache.install_tool_to_cache(self)
+
+
+    def get_file_to_download(self) -> str:
+        if is_windows():
+            return f'{self.tool_name}-x86_64-pc-windows-msvc.zip'
+        elif is_linux():
+            return f'{self.tool_name}-x86_64-unknown-linux-gnu.tar.xz'
+        else:
+            raise ValueError('Unsupported OS')
+
+
+    def get_download_url(self) -> str:
+        return f'https://github.com/{self.repo_owner}/{self.repo_name}/releases/download/{self.resolve_release_tag()}/{self.get_file_to_download()}'
+
+
+    def get_executable_name(self) -> str:
+        if is_windows():
+            return f'{self.tool_name}.exe'
+        elif is_linux():
+            return f'{self.tool_name}'
+        else:
+            raise ValueError('Unsupported OS')
+
+
+    def get_executable_path(self) -> Path:
+        return Path(self.get_tool_directory() / self.get_executable_name())
+
+
+    def get_current_preferred_release_tag(self) -> str:
+        default_value = "latest"
+
+        config_value = None
+        if self.settings:
+            config_value = self.settings.get(
+                f'{self.tool_name.lower()}_info',
+                {}
+            ).get(f'{self.tool_name.lower()}_release_tag')
+
+        env_value = os.environ.get(
+            f'{self.cache.main_tool_name.upper()}_{self.tool_name.upper()}_RELEASE_TAG'
+        )
+
+        cli_value = None
+        flag = f'--{self.tool_name.lower()}-release-tag'
+
+        if flag in sys.argv:
+            idx = sys.argv.index(flag)
+            if idx + 1 < len(sys.argv):
+                cli_value = sys.argv[idx + 1]
+            else:
+                raise RuntimeError(f"{flag} passed without value")
+
+        return next(
+            v for v in [cli_value, env_value, config_value, default_value]
+            if v not in (None, "")
+        )
+
+
+    def get_tool_directory(self) -> Path:
+        default_value = self.cache.get_tool_install_dir(
+            self.repo_name.lower(),
+            self.tool_name.lower(),
+            self.resolve_release_tag(),
+        )
+
+        config_value = None
+        if self.settings:
+            config_value = settings_information.settings.get(f"{self.tool_name.lower()}_info", {}).get(
+                f"{self.tool_name.lower()}_dir", None,
+            )
+
+        env_value = os.environ.get(f"{self.cache.main_tool_name.upper()}_{self.tool_name.upper()}_DIR")
+
+        cli_value = None
+        if f"--{self.tool_name.lower()}-dir" in sys.argv:
+            idx = sys.argv.index(f"--{self.tool_name.lower()}-dir")
+            if idx + 1 < len(sys.argv):
+                cli_value = sys.argv[idx + 1]
+            else:
+                raise RuntimeError(f"you passed --{self.tool_name.lower()}-dir without a tag after")
+
+        prioritized_value = next(
+            v for v in [cli_value, env_value, config_value, default_value]
+            if v not in (None, "")
+        )
+
+        if not prioritized_value:
+            raise RuntimeError('get tool directory could not find a prioritized value')
+
+        if isinstance(prioritized_value, str):
+            prioritized_value = Path(prioritized_value)
+
+        if not prioritized_value.is_absolute():
+            return Path(self.settings['settings_json_dir'] / prioritized_value).resolve()
+        else:
+            return Path(prioritized_value).resolve()
+
+
+    def is_current_preferred_tool_version_installed(self) -> bool:
+        for tool in self.cache.tools.tool_entries:
+            if tool.get_repo_name().lower() == self.repo_name.lower():
+                for entry in tool.cache_entries:
+                    if entry.release_tag == self.resolve_release_tag():
+                        if entry.is_cache_valid():
+                            return True
+        return False
